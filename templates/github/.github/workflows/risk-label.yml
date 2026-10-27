@@ -1,0 +1,47 @@
+name: Risk label
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write        # only used by the opt-in auto-merge step
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      # pull_request_target runs with the base branch's config and never checks out PR code.
+      - id: labeler
+        uses: actions/labeler@v5
+        with:
+          sync-labels: true
+
+      # Opt-in (playbook Phase 6): set the repository variable AUTO_MERGE_LOW_RISK=true
+      # and turn on "Allow auto-merge". GitHub still waits for required checks,
+      # resolved conversations and any approvals the ruleset requires.
+      - name: Enable auto-merge for low-risk PRs from trusted authors
+        if: >-
+          vars.AUTO_MERGE_LOW_RISK == 'true' &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) &&
+          contains(steps.labeler.outputs.all-labels, 'risk:low') &&
+          !contains(steps.labeler.outputs.all-labels, 'risk:medium') &&
+          !contains(steps.labeler.outputs.all-labels, 'risk:high')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+      # A later push can turn a docs-only PR into a code change: take back the
+      # auto-merge this workflow set (never one a person turned on).
+      - name: Turn off auto-merge if the PR is no longer low-risk
+        if: >-
+          github.event.pull_request.auto_merge.enabled_by.login == 'github-actions[bot]' && (
+            !contains(steps.labeler.outputs.all-labels, 'risk:low') ||
+            contains(steps.labeler.outputs.all-labels, 'risk:medium') ||
+            contains(steps.labeler.outputs.all-labels, 'risk:high'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --disable-auto "$PR_URL"
